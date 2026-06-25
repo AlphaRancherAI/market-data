@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.henry.marketdata-loginwatch</string>
+
+  <!-- Standalone login-wall watcher. Polls the ToS tab via CDP and pings Telegram when
+       the session is logged out so capture can be re-authed by hand. Does NOT log in. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/henry/workspace/market-data/src/login-watch.js</string>
+    <string>--loop</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/henry/workspace/market-data</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CDP_HOST</key>
+    <string>localhost</string>
+    <key>CDP_PORT</key>
+    <string>19222</string>
+    <key>LOGIN_POLL_INTERVAL</key>
+    <string>120000</string>
+    <key>LOGIN_ALERT_COOLDOWN</key>
+    <string>1800000</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/henry/workspace/market-data/logs/loginwatch.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/henry/workspace/market-data/logs/loginwatch.err.log</string>
+</dict>
+</plist>

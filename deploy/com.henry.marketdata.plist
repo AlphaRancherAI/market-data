@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.henry.marketdata</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/henry/workspace/market-data/src/runner.js</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/henry/workspace/market-data</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SYMBOLS</key>
+    <string>/ES:XCME</string>
+    <key>DRIVE_INTERVAL</key>
+    <string>900000</string>
+    <key>CDP_HOST</key>
+    <string>localhost</string>
+    <key>CDP_PORT</key>
+    <string>19222</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <!-- KeepAlive: launchd restarts the runner if it ever exits. -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- back off if it crashes immediately -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/henry/workspace/market-data/logs/runner.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/henry/workspace/market-data/logs/runner.err.log</string>
+</dict>
+</plist>

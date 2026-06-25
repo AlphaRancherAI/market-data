@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Large data files
+data/
+captures/
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Build artifacts
+dist/
+out/
+*.swp
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*

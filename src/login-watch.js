@@ -15,9 +15,13 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { spawn } = require('child_process');
+const { isFuturesOpen } = require('./market-hours');
 
 const CDP_HOST = process.env.CDP_HOST || 'localhost';
 const CDP_PORT = process.env.CDP_PORT || '19222';
+const ROOT = path.resolve(__dirname, '..');
+const NODE = process.execPath;
 
 function getTargets() {
   return new Promise((resolve, reject) => {
@@ -175,29 +179,110 @@ function clearAlerted() {
   try { fs.unlinkSync(ALERT_FLAG); } catch {}
 }
 
+// Debounce: a real logout persists across many polls; a tab mid-navigation (our own
+// re-drive, or any page transition) can momentarily look login-ish for a single poll
+// and then read AUTHED again on the next tick. Require LOGGED_OUT to hold across
+// CONSECUTIVE_LOGOUTS polls before alerting, so one-tick blips never page the user.
+const CONSECUTIVE_LOGOUTS = parseInt(process.env.LOGIN_CONSECUTIVE || '3', 10);
+let _consecutiveLoggedOut = 0;
+
 async function alertIfLoggedOut() {
   const { status, detail } = await checkLogin();
   if (status === 'LOGGED_OUT') {
-    const since = Date.now() - lastAlertAt();
-    if (since >= ALERT_COOLDOWN_MS) {
-      const ok = await sendTelegram(
-        'thinkorswim is logged out — market-data capture is paused.\n'
-        + 'Re-auth in Chrome Canary (one click, your saved password autofills) and capture resumes automatically.',
-      );
-      if (ok) markAlerted();
+    _consecutiveLoggedOut += 1;
+    // Only alert once the logout has held across enough consecutive polls.
+    if (_consecutiveLoggedOut >= CONSECUTIVE_LOGOUTS) {
+      const since = Date.now() - lastAlertAt();
+      if (since >= ALERT_COOLDOWN_MS) {
+        const ok = await sendTelegram(
+          'thinkorswim is logged out — market-data capture is paused.\n'
+          + 'Re-auth in Chrome Canary (one click, your saved password autofills) and capture resumes automatically.',
+        );
+        if (ok) markAlerted();
+      }
     }
-  } else if (status === 'AUTHED') {
-    // back in: reset the throttle so the next logout alerts immediately
-    if (lastAlertAt()) clearAlerted();
+  } else {
+    // Any non-logged-out reading (AUTHED or NO_TAB) breaks the streak.
+    _consecutiveLoggedOut = 0;
+    if (status === 'AUTHED') {
+      // back in: reset the throttle so the next genuine logout alerts immediately
+      if (lastAlertAt()) clearAlerted();
+    }
   }
   return status;
 }
 
-// Long-running loop: poll on an interval and alert on logout. Used by launchd.
-const POLL_INTERVAL_MS = parseInt(process.env.LOGIN_POLL_INTERVAL || '120000', 10); // 2 min
+// --- Stall watchdog ----------------------------------------------------------
+// Separate failure mode from logout: the session is AUTHED but the daemon stopped
+// receiving data (subscriptions went stale after a re-login, or the socket wedged).
+// We detect it by watching the curated capture files; if they stop growing while
+// authed + during market hours, we re-drive the UI to re-establish subscriptions.
+// This recovers from a stall on its own. It does NOT log in (that stays manual).
+const CURATED_DIR = process.env.CURATED_DIR || path.join(ROOT, 'data', 'curated');
+const STALL_THRESHOLD_MS = parseInt(process.env.STALL_THRESHOLD || '90000', 10); // 90s
+const REDRIVE_COOLDOWN_MS = parseInt(process.env.REDRIVE_COOLDOWN || '180000', 10); // 3 min
+const REDRIVE_SYMBOL = process.env.STALL_DRIVE_SYMBOL || (process.env.SYMBOLS || '/ES:XCME').split(',')[0].trim();
+
+function ymd(d = new Date()) {
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(d).reduce((a, x) => (a[x.type] = x.value, a), {});
+  return `${p.year}${p.month}${p.day}`;
+}
+
+// Total bytes of today's primary capture streams (tape + quotes). Growth => data flowing.
+function captureBytes() {
+  let total = 0;
+  const day = ymd();
+  for (const stream of ['tape', 'quotes', 'option_quotes']) {
+    try { total += fs.statSync(path.join(CURATED_DIR, `${stream}-${day}.jsonl`)).size; } catch {}
+  }
+  return total;
+}
+
+let _lastBytes = null;
+let _lastGrowAt = Date.now();
+// Start "long ago" so the first detected stall can recover immediately (don't let the
+// cooldown gate the very first re-drive).
+let _lastRedriveAt = Date.now() - REDRIVE_COOLDOWN_MS;
+
+function reDrive() {
+  console.error(`[login-watch ${new Date().toISOString()}] STALL detected — re-driving ${REDRIVE_SYMBOL}`);
+  const p = spawn(NODE, [path.join(ROOT, 'src', 'ui-driver.js'), REDRIVE_SYMBOL], {
+    stdio: ['ignore', 'ignore', 'inherit'],
+    env: { ...process.env, FORCE_OPEN: '1' },
+  });
+  // hard cap so a hung driver never lingers
+  const cap = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} }, 120000);
+  p.on('exit', (code) => { clearTimeout(cap); console.error(`[login-watch] re-drive exited code=${code}`); });
+}
+
+// Returns true if it took a recovery action this tick.
+function checkStall(status) {
+  // Only meaningful when authed and the market is open.
+  if (status !== 'AUTHED' || !isFuturesOpen()) {
+    _lastBytes = null; // reset baseline so we don't count a closed-market gap as a stall
+    return false;
+  }
+  const bytes = captureBytes();
+  if (_lastBytes === null) { _lastBytes = bytes; _lastGrowAt = Date.now(); return false; }
+  if (bytes > _lastBytes) { _lastBytes = bytes; _lastGrowAt = Date.now(); return false; }
+
+  // No growth since _lastGrowAt.
+  const stalledFor = Date.now() - _lastGrowAt;
+  if (stalledFor >= STALL_THRESHOLD_MS && (Date.now() - _lastRedriveAt) >= REDRIVE_COOLDOWN_MS) {
+    _lastRedriveAt = Date.now();
+    _lastGrowAt = Date.now(); // give the re-drive time to take effect before re-triggering
+    reDrive();
+    return true;
+  }
+  return false;
+}
+
+// Long-running loop: poll on an interval, alert on logout, recover from stalls. Used by launchd.
+const POLL_INTERVAL_MS = parseInt(process.env.LOGIN_POLL_INTERVAL || '30000', 10); // 30s
 
 async function loop() {
-  console.error(`[login-watch] up. poll=${POLL_INTERVAL_MS}ms cooldown=${ALERT_COOLDOWN_MS}ms`);
+  console.error(`[login-watch] up. poll=${POLL_INTERVAL_MS}ms loginCooldown=${ALERT_COOLDOWN_MS}ms stall=${STALL_THRESHOLD_MS}ms redriveCooldown=${REDRIVE_COOLDOWN_MS}ms`);
   let last = null;
   for (;;) {
     let status;
@@ -207,11 +292,13 @@ async function loop() {
       console.error(`[login-watch ${new Date().toISOString()}] ${status}`);
       last = status;
     }
+    try { checkStall(status); }
+    catch (e) { console.error('[login-watch] stall check error:', e.message); }
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
   }
 }
 
-module.exports = { checkLogin, alertIfLoggedOut, sendTelegram, loop };
+module.exports = { checkLogin, alertIfLoggedOut, sendTelegram, loop, captureBytes, checkStall };
 
 // CLI: `--loop` runs forever (launchd); otherwise a single check + exit.
 if (require.main === module) {

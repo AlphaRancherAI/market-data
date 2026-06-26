@@ -24,9 +24,17 @@
     <key>CDP_PORT</key>
     <string>19222</string>
     <key>LOGIN_POLL_INTERVAL</key>
-    <string>120000</string>
+    <string>30000</string>
     <key>LOGIN_ALERT_COOLDOWN</key>
     <string>1800000</string>
+    <key>LOGIN_CONSECUTIVE</key>
+    <string>3</string>
+    <key>STALL_THRESHOLD</key>
+    <string>90000</string>
+    <key>REDRIVE_COOLDOWN</key>
+    <string>180000</string>
+    <key>SYMBOLS</key>
+    <string>/ES:XCME</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>

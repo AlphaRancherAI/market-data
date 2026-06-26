@@ -44,8 +44,18 @@ launchctl print "gui/$(id -u)/com.henry.marketdata-loginwatch" | grep -E "state 
 launchctl bootout "gui/$(id -u)/com.henry.marketdata-loginwatch"
 ```
 
-Watcher env (plist): `LOGIN_POLL_INTERVAL` (default 120000 ms), `LOGIN_ALERT_COOLDOWN`
-(default 1800000 ms — throttles repeat alerts), `CDP_HOST`/`CDP_PORT`.
+The same watcher also runs a **stall watchdog**: a separate failure mode where the session
+is authed but the daemon stops receiving data (subscriptions go stale after a re-login, or
+the socket wedges). It watches the curated capture files (`tape`/`quotes`/`option_quotes`)
+and, if they stop growing while authed + during CME futures hours for `STALL_THRESHOLD`,
+re-runs the UI driver to re-establish subscriptions — recovering from a stall on its own. It
+does **not** log in (that stays manual).
+
+Watcher env (plist): `LOGIN_POLL_INTERVAL` (default 30000 ms), `LOGIN_ALERT_COOLDOWN`
+(default 1800000 ms — throttles repeat logout alerts), `STALL_THRESHOLD` (default 90000 ms —
+no capture-file growth this long while authed/open => stalled), `REDRIVE_COOLDOWN` (default
+180000 ms — min gap between stall re-drives), `SYMBOLS` (first symbol is re-driven on stall),
+`CDP_HOST`/`CDP_PORT`.
 
 ## Install (launchd, KeepAlive)
 

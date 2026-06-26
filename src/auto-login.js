@@ -71,6 +71,10 @@ async function autoLogin(passwordArg) {
 
       log('page is logged out, attempting auto-login');
 
+      // Bring tab to front so Chrome doesn't throttle JS execution
+      await page.bringToFront();
+      await page.waitForTimeout(300);
+
       // Schwab has a two-step login: first Login ID, then Password
       // Get the iframe that contains the login form
       const frames = page.frames();

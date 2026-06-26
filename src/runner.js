@@ -19,7 +19,7 @@ const { isFuturesOpen } = require('./market-hours');
 
 const ROOT = path.resolve(__dirname, '..');
 const NODE = process.execPath;
-const SYMBOLS = (process.env.SYMBOLS || '/ES:XCME,/NQ:XCME').split(',').map((s) => s.trim()).filter(Boolean);
+const SYMBOLS = (process.env.SYMBOLS || '/ES:XCME').split(',').map((s) => s.trim()).filter(Boolean);
 const DRIVE_INTERVAL = parseInt(process.env.DRIVE_INTERVAL || '900000', 10);
 const FORCE_OPEN = process.env.FORCE_OPEN === '1';
 

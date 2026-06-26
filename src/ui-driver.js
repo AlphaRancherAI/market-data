@@ -133,6 +133,10 @@ async function main() {
 
   console.error(`[ui-driver] driving ${SYMBOL} on ${tab.url}`);
 
+  // Bring tab to front so Chrome doesn't throttle background JS/WebSocket activity
+  await page.send('Page.bringToFront');
+  await sleep(300);
+
   // 1) Load the charts page for the symbol (subscribes quotes + chart)
   const enc = encodeURIComponent(SYMBOL);
   await page.navigate(`https://trade.thinkorswim.com/charts?symbol=${enc}`);

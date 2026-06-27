@@ -96,15 +96,17 @@ function runUiDriver(symbol) {
 
 async function driveCycle() {
   if (driving) return;
-  if (!FORCE_OPEN && !isFuturesOpen()) { log('market closed, skipping drive cycle'); return; }
   driving = true;
   try {
-    // Check login before driving
+    // Always check login regardless of market hours — a logout during off-hours
+    // would otherwise stall data collection until the next open.
     const loggedIn = await ensureLoggedIn();
     if (!loggedIn) {
       log('not logged in and auto-login failed, skipping drive cycle');
       return;
     }
+
+    if (!FORCE_OPEN && !isFuturesOpen()) { log('market closed, skipping drive cycle'); return; }
 
     for (const sym of SYMBOLS) {
       log(`driving ${sym}`);

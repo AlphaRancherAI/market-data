@@ -75,6 +75,14 @@ async function autoLogin(passwordArg) {
       await page.bringToFront();
       await page.waitForTimeout(300);
 
+      // Always navigate to the full trade page so the Schwab SSO iframe loads with the
+      // proper redirect state (?clientID=TOSWeb&redirectUri=...&state=symbol%3D%2FES...).
+      // Without this, the iframe URL is just #/login with no state, and Schwab doesn't
+      // know where to redirect after auth — login completes but the session goes nowhere.
+      log('navigating to trade page so SSO iframe loads with correct redirect state');
+      await page.goto('https://trade.thinkorswim.com/trade?symbol=%2FES%3AXCME');
+      await page.waitForTimeout(3000);
+
       // Schwab has a two-step login: first Login ID, then Password
       // Get the iframe that contains the login form
       const frames = page.frames();

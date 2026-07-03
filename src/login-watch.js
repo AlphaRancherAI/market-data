@@ -167,6 +167,7 @@ async function checkLogin() {
 
 // Throttled alert: writes a timestamp to a flag file so we don't re-spam every cycle.
 const ALERT_FLAG = process.env.LOGIN_ALERT_FLAG || path.join(os.tmpdir(), 'market-data-login-alert.json');
+const BROWSER_ALERT_FLAG = process.env.BROWSER_ALERT_FLAG || path.join(os.tmpdir(), 'market-data-browser-alert.json');
 const ALERT_COOLDOWN_MS = parseInt(process.env.LOGIN_ALERT_COOLDOWN || '1800000', 10); // 30 min
 
 function lastAlertAt() {
@@ -177,6 +178,16 @@ function markAlerted() {
 }
 function clearAlerted() {
   try { fs.unlinkSync(ALERT_FLAG); } catch {}
+}
+
+function lastBrowserAlertAt() {
+  try { return JSON.parse(fs.readFileSync(BROWSER_ALERT_FLAG, 'utf8')).at || 0; } catch { return 0; }
+}
+function markBrowserAlerted() {
+  try { fs.writeFileSync(BROWSER_ALERT_FLAG, JSON.stringify({ at: Date.now() })); } catch {}
+}
+function clearBrowserAlerted() {
+  try { fs.unlinkSync(BROWSER_ALERT_FLAG); } catch {}
 }
 
 // Debounce: a real logout persists across many polls; a tab mid-navigation (our own
@@ -292,6 +303,21 @@ async function loop() {
       console.error(`[login-watch ${new Date().toISOString()}] ${status}`);
       last = status;
     }
+
+    // Alert if browser is unreachable (crashed/closed) — separate from logout alert
+    if (status === 'NO_TAB') {
+      const since = Date.now() - lastBrowserAlertAt();
+      if (since >= ALERT_COOLDOWN_MS) {
+        const ok = await sendTelegram(
+          '⚠️ Chrome Canary is unreachable (CDP port 19222 down) — market-data capture is stopped.\n'
+          + 'Auto-login will attempt to restart Chrome automatically. Check if the machine is responsive.',
+        );
+        if (ok) markBrowserAlerted();
+      }
+    } else {
+      if (lastBrowserAlertAt()) clearBrowserAlerted();
+    }
+
     try { checkStall(status); }
     catch (e) { console.error('[login-watch] stall check error:', e.message); }
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));

@@ -17,11 +17,51 @@ const os = require('os');
 
 const CDP_PORT = process.env.CDP_PORT || '19222';
 const PROFILE_DIR = path.join(os.homedir(), '.jarvis', 'browser', 'profile');
+const CANARY_BIN = '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary';
+
+function isCdpUp() {
+  return new Promise((resolve) => {
+    const req = require('http').get(`http://localhost:${CDP_PORT}/json`, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.setTimeout(2000, () => { req.destroy(); resolve(false); });
+  });
+}
+
+async function launchBrowser() {
+  log('Chrome CDP unreachable — launching Chrome Canary');
+  const { spawn } = require('child_process');
+  const proc = spawn(CANARY_BIN, [
+    `--remote-debugging-port=${CDP_PORT}`,
+    `--user-data-dir=${PROFILE_DIR}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+  ], { detached: true, stdio: 'ignore' });
+  proc.unref();
+  // Wait for CDP to come up
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    if (await isCdpUp()) { log('Chrome Canary launched and CDP is up'); return true; }
+  }
+  log('Chrome Canary launched but CDP did not come up in time');
+  return false;
+}
 
 const log = (msg) => console.error(`[auto-login ${new Date().toISOString()}]`, msg);
 
 async function getAuthenticatedPage() {
   try {
+    // If CDP is down, try to launch Chrome Canary
+    if (!await isCdpUp()) {
+      const launched = await launchBrowser();
+      if (!launched) {
+        log('could not launch Chrome Canary');
+        return null;
+      }
+    }
+
     // Connect to the existing Chromium instance via CDP
     const browser = await chromium.connectOverCDP(`http://localhost:${CDP_PORT}`);
     const contexts = browser.contexts();
@@ -33,12 +73,13 @@ async function getAuthenticatedPage() {
     const context = contexts[0];
     const pages = context.pages();
 
-    // Find the thinkorswim page
-    const tosPage = pages.find(p => p.url().includes('thinkorswim') || p.url().includes('trade.thinkorswim'));
-
+    // Find the thinkorswim page, or open one if Chrome just relaunched
+    let tosPage = pages.find(p => p.url().includes('thinkorswim'));
     if (!tosPage) {
-      log('no thinkorswim page found');
-      return null;
+      log('no thinkorswim tab found — opening one');
+      tosPage = await context.newPage();
+      await tosPage.goto('https://trade.thinkorswim.com/trade?symbol=%2FES%3AXCME');
+      await tosPage.waitForTimeout(3000);
     }
 
     return { browser, page: tosPage };

@@ -122,17 +122,21 @@ async function autoLogin(passwordArg) {
       // know where to redirect after auth — login completes but the session goes nowhere.
       log('navigating to trade page so SSO iframe loads with correct redirect state');
       await page.goto('https://trade.thinkorswim.com/trade?symbol=%2FES%3AXCME');
-      await page.waitForTimeout(3000);
 
-      // Schwab has a two-step login: first Login ID, then Password
-      // Get the iframe that contains the login form
-      const frames = page.frames();
-      const iframeFrame = frames.find(f => f.url().includes('sws-gateway-nr'));
+      // Wait for the SSO iframe to appear — it loads asynchronously and can take 5-10s
+      log('waiting for SSO iframe to appear');
+      let iframeFrame = null;
+      for (let i = 0; i < 20; i++) {
+        iframeFrame = page.frames().find(f => f.url().includes('sws-gateway-nr'));
+        if (iframeFrame) break;
+        await page.waitForTimeout(500);
+      }
 
       if (!iframeFrame) {
-        log('login iframe not found');
+        log('login iframe not found after 10s');
         return { success: false, reason: 'no_login_iframe' };
       }
+      log(`iframe found: ${iframeFrame.url()}`);
 
       // Step 1: Check if login ID field is visible and submit it
       log('checking for login ID field');

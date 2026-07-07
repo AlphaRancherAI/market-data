@@ -14,6 +14,7 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { execSync } = require('child_process');
 
 const CDP_PORT = process.env.CDP_PORT || '19222';
 const PROFILE_DIR = path.join(os.homedir(), '.jarvis', 'browser', 'profile');
@@ -112,16 +113,14 @@ async function autoLogin(passwordArg) {
 
       log('page is logged out, attempting auto-login');
 
-      // Bring tab to front so Chrome doesn't throttle JS execution
+      // Two-step wake-up for Chrome Canary's blank-window rendering glitch:
+      //   1. AppleScript 'activate' raises Chrome to the OS foreground.
+      //   2. page.screenshot() forces Chrome to render a real frame (compositor
+      //      must produce pixels), restoring rendering from a blank state.
+      try { execSync(`osascript -e 'tell application "Google Chrome Canary" to activate'`); } catch {}
       await page.bringToFront();
-      await page.waitForTimeout(300);
-
-      // Simulate mouse movement to force Chrome's GPU compositor to repaint.
-      // Same blank-window workaround as ui-driver: synthetic mouse events via Playwright
-      // have the same repaint effect as physical mouse movement.
-      for (const [x, y] of [[200, 200], [600, 300], [400, 500]]) {
-        await page.mouse.move(x, y);
-      }
+      await page.waitForTimeout(500);
+      try { await page.screenshot({ type: 'jpeg', quality: 5 }); } catch {}
       await page.waitForTimeout(300);
 
       // Always navigate to the full trade page so the Schwab SSO iframe loads with the

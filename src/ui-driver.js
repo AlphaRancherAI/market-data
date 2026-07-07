@@ -13,6 +13,7 @@
 // Usage: node src/ui-driver.js [symbol]   (default /ES:XCME)
 const WebSocket = require('ws');
 const http = require('http');
+const { execSync } = require('child_process');
 
 const CDP_HOST = process.env.CDP_HOST || 'localhost';
 const CDP_PORT = process.env.CDP_PORT || '19222';
@@ -133,18 +134,18 @@ async function main() {
 
   console.error(`[ui-driver] driving ${SYMBOL} on ${tab.url}`);
 
-  // Bring tab to front so Chrome doesn't throttle background JS/WebSocket activity
+  // Two-step wake-up for Chrome Canary's blank-window rendering glitch:
+  //   1. AppleScript 'activate' raises the Chrome app to the OS foreground.
+  //      Page.bringToFront is Chrome-internal only and doesn't tell macOS to
+  //      surface the window — so Chrome stays throttled by the OS compositor.
+  //   2. Page.captureScreenshot forces Chrome to render a real frame. The
+  //      compositor must produce pixels to satisfy the request, which restores
+  //      normal rendering even if the window was fully blank.
+  try { execSync(`osascript -e 'tell application "Google Chrome Canary" to activate'`); } catch {}
   await page.send('Page.bringToFront');
+  await sleep(500);
+  try { await page.send('Page.captureScreenshot', { format: 'jpeg', quality: 5 }); } catch {}
   await sleep(300);
-
-  // Simulate mouse movement to force Chrome's GPU compositor to repaint.
-  // Chrome Canary has a rendering bug where the window goes blank but the page
-  // keeps running — DOM interactions stall until a physical mouse event triggers
-  // a repaint. Dispatching synthetic mouse moves via CDP has the same effect.
-  for (const [x, y] of [[200, 200], [600, 300], [400, 500], [200, 400]]) {
-    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0 });
-  }
-  await sleep(400);
 
   // 1) Load the charts page for the symbol (subscribes quotes + chart)
   const enc = encodeURIComponent(SYMBOL);

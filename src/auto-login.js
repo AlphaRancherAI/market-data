@@ -116,6 +116,14 @@ async function autoLogin(passwordArg) {
       await page.bringToFront();
       await page.waitForTimeout(300);
 
+      // Simulate mouse movement to force Chrome's GPU compositor to repaint.
+      // Same blank-window workaround as ui-driver: synthetic mouse events via Playwright
+      // have the same repaint effect as physical mouse movement.
+      for (const [x, y] of [[200, 200], [600, 300], [400, 500]]) {
+        await page.mouse.move(x, y);
+      }
+      await page.waitForTimeout(300);
+
       // Always navigate to the full trade page so the Schwab SSO iframe loads with the
       // proper redirect state (?clientID=TOSWeb&redirectUri=...&state=symbol%3D%2FES...).
       // Without this, the iframe URL is just #/login with no state, and Schwab doesn't

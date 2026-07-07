@@ -137,6 +137,15 @@ async function main() {
   await page.send('Page.bringToFront');
   await sleep(300);
 
+  // Simulate mouse movement to force Chrome's GPU compositor to repaint.
+  // Chrome Canary has a rendering bug where the window goes blank but the page
+  // keeps running — DOM interactions stall until a physical mouse event triggers
+  // a repaint. Dispatching synthetic mouse moves via CDP has the same effect.
+  for (const [x, y] of [[200, 200], [600, 300], [400, 500], [200, 400]]) {
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0 });
+  }
+  await sleep(400);
+
   // 1) Load the charts page for the symbol (subscribes quotes + chart)
   const enc = encodeURIComponent(SYMBOL);
   await page.navigate(`https://trade.thinkorswim.com/charts?symbol=${enc}`);

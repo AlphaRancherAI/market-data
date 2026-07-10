@@ -17,6 +17,7 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const { isFuturesOpen } = require('./market-hours');
+const { wakeChrome } = require('./wake-chrome');
 
 const CDP_HOST = process.env.CDP_HOST || 'localhost';
 const CDP_PORT = process.env.CDP_PORT || '19222';
@@ -256,8 +257,20 @@ let _lastGrowAt = Date.now();
 // cooldown gate the very first re-drive).
 let _lastRedriveAt = Date.now() - REDRIVE_COOLDOWN_MS;
 
-function reDrive() {
-  console.error(`[login-watch ${new Date().toISOString()}] STALL detected — re-driving ${REDRIVE_SYMBOL}`);
+// Escalation: a re-drive can't fix a CRASHED renderer (the Jun 28->Jul 2 outage: the
+// tab's renderer crashed, every re-drive hit "Target crashed", data stayed dead for
+// ~3.5 days and NOTHING alerted because a stall was silent). Track consecutive re-drives
+// that did NOT restore data flow; after ESCALATE_AFTER of them, reload the tab (CDP
+// Page.reload) AND send a Telegram alert. Still no auto-login (that stays manual).
+const ESCALATE_AFTER = parseInt(process.env.STALL_ESCALATE_AFTER || '3', 10);
+let _redrivePending = false;   // a re-drive fired and we're waiting to see if data resumes
+let _failedRedrives = 0;       // consecutive re-drives that didn't restore growth
+
+async function reDrive() {
+  console.error(`[login-watch ${new Date().toISOString()}] STALL detected — waking Chrome then re-driving ${REDRIVE_SYMBOL}`);
+  // Wake Chrome first: bring it to OS foreground and sweep the cursor over it so the
+  // GPU compositor exits the blank state before ui-driver tries to interact with the DOM.
+  await wakeChrome(null).catch((e) => console.error('[login-watch] wakeChrome error:', e.message));
   const p = spawn(NODE, [path.join(ROOT, 'src', 'ui-driver.js'), REDRIVE_SYMBOL], {
     stdio: ['ignore', 'ignore', 'inherit'],
     env: { ...process.env, FORCE_OPEN: '1' },
@@ -267,23 +280,81 @@ function reDrive() {
   p.on('exit', (code) => { clearTimeout(cap); console.error(`[login-watch] re-drive exited code=${code}`); });
 }
 
+// Reload the ToS tab via CDP (Page.reload) to recover a crashed/wedged renderer that a
+// re-drive alone can't fix. Best-effort; returns true if the reload command was sent.
+async function reloadTab() {
+  let targets;
+  try { targets = await getTargets(); } catch { return false; }
+  const tab = targets.find((t) => t.type === 'page' && (t.url || '').includes('thinkorswim') && t.webSocketDebuggerUrl);
+  if (!tab) return false;
+  return new Promise((resolve) => {
+    const ws = new WebSocket(tab.webSocketDebuggerUrl, { perMessageDeflate: false });
+    const done = (v) => { try { ws.close(); } catch {} resolve(v); };
+    const timer = setTimeout(() => done(false), 8000);
+    ws.on('open', () => {
+      try { ws.send(JSON.stringify({ id: 1, method: 'Page.reload', params: { ignoreCache: true } })); } catch {}
+      clearTimeout(timer);
+      // give the command a moment to dispatch before closing the socket
+      setTimeout(() => done(true), 500);
+    });
+    ws.on('error', () => { clearTimeout(timer); done(false); });
+  });
+}
+
+async function escalate() {
+  console.error(`[login-watch ${new Date().toISOString()}] ESCALATE — ${_failedRedrives} re-drives failed to restore data; reloading tab + alerting`);
+  const reloaded = await reloadTab();
+  console.error(`[login-watch] tab reload ${reloaded ? 'sent' : 'FAILED'}`);
+  const since = Date.now() - lastBrowserAlertAt();
+  if (since >= ALERT_COOLDOWN_MS) {
+    const ok = await sendTelegram(
+      '⚠️ market-data capture is STALLED — data stopped flowing while logged in '
+      + `(${_failedRedrives} auto re-drives didn't recover it, likely a crashed tab).\n`
+      + `I ${reloaded ? 'reloaded the ToS tab automatically' : 'could not reload the tab'}. `
+      + 'If data doesn\'t resume shortly, check Chrome Canary / re-auth the tab.',
+    );
+    if (ok) markBrowserAlerted();
+  }
+}
+
 // Returns true if it took a recovery action this tick.
 function checkStall(status) {
   // Only meaningful when authed and the market is open.
   if (status !== 'AUTHED' || !isFuturesOpen()) {
     _lastBytes = null; // reset baseline so we don't count a closed-market gap as a stall
+    _redrivePending = false;
+    _failedRedrives = 0;
     return false;
   }
   const bytes = captureBytes();
   if (_lastBytes === null) { _lastBytes = bytes; _lastGrowAt = Date.now(); return false; }
-  if (bytes > _lastBytes) { _lastBytes = bytes; _lastGrowAt = Date.now(); return false; }
+  if (bytes > _lastBytes) {
+    // Data is flowing again — clear any escalation state.
+    _lastBytes = bytes; _lastGrowAt = Date.now();
+    _redrivePending = false; _failedRedrives = 0;
+    if (lastBrowserAlertAt()) clearBrowserAlerted();
+    return false;
+  }
 
   // No growth since _lastGrowAt.
   const stalledFor = Date.now() - _lastGrowAt;
   if (stalledFor >= STALL_THRESHOLD_MS && (Date.now() - _lastRedriveAt) >= REDRIVE_COOLDOWN_MS) {
+    // If we already re-drove last cycle and data STILL hasn't grown, that re-drive failed.
+    if (_redrivePending) _failedRedrives += 1;
+
+    if (_failedRedrives >= ESCALATE_AFTER) {
+      // Re-drives aren't working (crashed renderer). Reload the tab + alert, then reset the
+      // failure count so the next escalation is gated by the alert cooldown, not spammed.
+      _lastRedriveAt = Date.now();
+      _failedRedrives = 0;
+      _redrivePending = false;
+      escalate().catch((e) => console.error('[login-watch] escalate error:', e.message));
+      return true;
+    }
+
     _lastRedriveAt = Date.now();
-    _lastGrowAt = Date.now(); // give the re-drive time to take effect before re-triggering
-    reDrive();
+    _redrivePending = true;
+    reDrive().catch((e) => console.error('[login-watch] reDrive error:', e.message));
     return true;
   }
   return false;

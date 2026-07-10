@@ -13,7 +13,7 @@
 // Usage: node src/ui-driver.js [symbol]   (default /ES:XCME)
 const WebSocket = require('ws');
 const http = require('http');
-const { execSync } = require('child_process');
+const { wakeChrome } = require('./wake-chrome');
 
 const CDP_HOST = process.env.CDP_HOST || 'localhost';
 const CDP_PORT = process.env.CDP_PORT || '19222';
@@ -134,17 +134,11 @@ async function main() {
 
   console.error(`[ui-driver] driving ${SYMBOL} on ${tab.url}`);
 
-  // Two-step wake-up for Chrome Canary's blank-window rendering glitch:
-  //   1. AppleScript 'activate' raises the Chrome app to the OS foreground.
-  //      Page.bringToFront is Chrome-internal only and doesn't tell macOS to
-  //      surface the window — so Chrome stays throttled by the OS compositor.
-  //   2. Page.captureScreenshot forces Chrome to render a real frame. The
-  //      compositor must produce pixels to satisfy the request, which restores
-  //      normal rendering even if the window was fully blank.
-  try { execSync(`osascript -e 'tell application "Google Chrome Canary" to activate'`); } catch {}
+  // Wake Chrome: activate at OS level, sweep OS cursor over window, force render frame.
+  // Must happen before any DOM interaction — Chrome's compositor goes blank when behind
+  // other windows and only recovers once the cursor physically hovers over it.
+  await wakeChrome(page);
   await page.send('Page.bringToFront');
-  await sleep(500);
-  try { await page.send('Page.captureScreenshot', { format: 'jpeg', quality: 5 }); } catch {}
   await sleep(300);
 
   // 1) Load the charts page for the symbol (subscribes quotes + chart)

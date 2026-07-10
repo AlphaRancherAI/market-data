@@ -14,7 +14,7 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { wakeChrome } = require('./wake-chrome');
 
 const CDP_PORT = process.env.CDP_PORT || '19222';
 const PROFILE_DIR = path.join(os.homedir(), '.jarvis', 'browser', 'profile');
@@ -113,14 +113,9 @@ async function autoLogin(passwordArg) {
 
       log('page is logged out, attempting auto-login');
 
-      // Two-step wake-up for Chrome Canary's blank-window rendering glitch:
-      //   1. AppleScript 'activate' raises Chrome to the OS foreground.
-      //   2. page.screenshot() forces Chrome to render a real frame (compositor
-      //      must produce pixels), restoring rendering from a blank state.
-      try { execSync(`osascript -e 'tell application "Google Chrome Canary" to activate'`); } catch {}
+      // Wake Chrome: activate at OS level, sweep OS cursor over window, force render frame.
+      await wakeChrome(null); // no raw CDP page here; Playwright handles its own rendering
       await page.bringToFront();
-      await page.waitForTimeout(500);
-      try { await page.screenshot({ type: 'jpeg', quality: 5 }); } catch {}
       await page.waitForTimeout(300);
 
       // Always navigate to the full trade page so the Schwab SSO iframe loads with the

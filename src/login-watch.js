@@ -191,15 +191,23 @@ function clearBrowserAlerted() {
   try { fs.unlinkSync(BROWSER_ALERT_FLAG); } catch {}
 }
 
-// Debounce: a real logout persists across many polls; a tab mid-navigation (our own
-// re-drive, or any page transition) can momentarily look login-ish for a single poll
-// and then read AUTHED again on the next tick. Require LOGGED_OUT to hold across
-// CONSECUTIVE_LOGOUTS polls before alerting, so one-tick blips never page the user.
+// Logout Telegram alerts are DISABLED by default (Henry, 2026-07-08). The watcher still
+// determines AUTHED/LOGGED_OUT/NO_TAB internally because the stall watchdog and the
+// browser-unreachable (NO_TAB) alert both depend on that status, but it no longer pages
+// on logout. Set LOGIN_ALERT_ENABLED=1 to re-enable the logout alert + its debounce.
+const LOGIN_ALERT_ENABLED = process.env.LOGIN_ALERT_ENABLED === '1';
+// Debounce (only used when logout alerts are enabled): a real logout persists across many
+// polls; a tab mid-navigation can momentarily look login-ish for a single poll. Require
+// LOGGED_OUT to hold across CONSECUTIVE_LOGOUTS polls before alerting.
 const CONSECUTIVE_LOGOUTS = parseInt(process.env.LOGIN_CONSECUTIVE || '3', 10);
 let _consecutiveLoggedOut = 0;
 
 async function alertIfLoggedOut() {
-  const { status, detail } = await checkLogin();
+  const { status } = await checkLogin();
+  if (!LOGIN_ALERT_ENABLED) {
+    // Logout alerting off: still return status for the stall/NO_TAB paths, no Telegram.
+    return status;
+  }
   if (status === 'LOGGED_OUT') {
     _consecutiveLoggedOut += 1;
     // Only alert once the logout has held across enough consecutive polls.
@@ -242,11 +250,18 @@ function ymd(d = new Date()) {
 }
 
 // Total bytes of today's primary capture streams (tape + quotes). Growth => data flowing.
+// The daemon rolls its date files at UTC midnight but ymd() uses CDT (UTC-5), so from
+// CDT 19:00 to midnight (= UTC 00:00 to 05:00) the daemon writes to tomorrow's CDT-date
+// files while we'd only look at today's (stalled) files. Check both dates to avoid
+// false stall alerts during that 5-hour rollover window.
 function captureBytes() {
   let total = 0;
-  const day = ymd();
+  const today = ymd();
+  const tomorrow = ymd(new Date(Date.now() + 86400000));
   for (const stream of ['tape', 'quotes', 'option_quotes']) {
-    try { total += fs.statSync(path.join(CURATED_DIR, `${stream}-${day}.jsonl`)).size; } catch {}
+    for (const day of [today, tomorrow]) {
+      try { total += fs.statSync(path.join(CURATED_DIR, `${stream}-${day}.jsonl`)).size; } catch {}
+    }
   }
   return total;
 }

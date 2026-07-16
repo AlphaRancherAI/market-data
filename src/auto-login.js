@@ -113,6 +113,11 @@ async function autoLogin(passwordArg) {
 
       log('page is logged out, attempting auto-login');
 
+      if (!passwordArg) {
+        log('no password available (SCHWAB_PASSWORD not set), cannot log in');
+        return { success: false, reason: 'no_password' };
+      }
+
       // Wake Chrome: activate at OS level, sweep OS cursor over window, force render frame.
       await wakeChrome(null); // no raw CDP page here; Playwright handles its own rendering
       await page.bringToFront();
@@ -279,21 +284,13 @@ async function autoLogin(passwordArg) {
   }
 }
 
-// CLI
+// CLI — always attempt (may return already_authed without needing the password)
 const passwordArg = process.argv[2] || process.env.SCHWAB_PASSWORD;
-
-if (!passwordArg) {
-  console.log(JSON.stringify({
-    success: false,
-    reason: 'no_password',
-    error: 'Password not provided via argument or SCHWAB_PASSWORD env var'
-  }));
-  process.exit(2);
-}
 
 autoLogin(passwordArg).then((result) => {
   console.log(JSON.stringify(result));
-  process.exit(result.success ? 0 : 2);
+  // exit 0 for success or already_authed; exit 2 for everything else
+  process.exit((result.success || result.reason === 'already_authed') ? 0 : 2);
 }).catch((e) => {
   console.error('[auto-login] unexpected error:', e);
   process.exit(2);
